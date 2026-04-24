@@ -13,14 +13,11 @@ def get_db():
 
 conn = get_db()
 cur = conn.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER, name TEXT, chat_id TEXT)")
-cur.execute("CREATE TABLE IF NOT EXISTS devices(device_id TEXT, user_id INTEGER)")
+cur.execute("CREATE TABLE IF NOT EXISTS users(id TEXT, name TEXT, chat_id TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS devices(device_id TEXT, user_id TEXT)")
 cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id TEXT, time TEXT)")
 cur.execute("CREATE TABLE IF NOT EXISTS admins(username TEXT, password TEXT)")
-conn.commit()
-
-# --- FORCE UPDATE ADMIN PASSWORD ---
-# Dòng này đảm bảo dù database cũ có gì, mật khẩu sẽ luôn là 123456 khi bạn restart server
+# Đảm bảo mật khẩu luôn đúng
 cur.execute("DELETE FROM admins WHERE username='admin'")
 cur.execute("INSERT INTO admins VALUES('admin','123456')")
 conn.commit()
@@ -30,29 +27,19 @@ def token_required(f):
     def decorated(*args, **kwargs):
         token = request.headers.get("Authorization")
         if not token: return jsonify({"error": "No token"}), 403
-        try: 
-            jwt.decode(token, SECRET, algorithms=["HS256"])
-        except: 
-            return jsonify({"error": "Invalid token"}), 403
+        try: jwt.decode(token, SECRET, algorithms=["HS256"])
+        except: return jsonify({"error": "Invalid token"}), 403
         return f(*args, **kwargs)
     return decorated
 
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.json
-    u = data.get("username")
-    p = data.get("password")
-    
-    cur.execute("SELECT * FROM admins WHERE username=? AND password=?", (u, p))
+    cur.execute("SELECT * FROM admins WHERE username=? AND password=?", (data.get("username"), data.get("password")))
     if cur.fetchone():
-        # Xử lý Token để tương thích mọi phiên bản thư viện
-        encoded_jwt = jwt.encode({"time": time.time()}, SECRET, algorithm="HS256")
-        if isinstance(encoded_jwt, bytes):
-            encoded_jwt = encoded_jwt.decode('utf-8')
-            
-        return jsonify({"token": encoded_jwt})
-    
-    return jsonify({"error": "Wrong username or password"}), 401
+        token = jwt.encode({"time": time.time()}, SECRET, algorithm="HS256")
+        return jsonify({"token": token})
+    return "FAIL", 401
 
 @app.route("/api/update_name", methods=["POST"])
 @token_required
@@ -69,14 +56,9 @@ def receive_data():
     cur.execute("INSERT INTO data VALUES(?,?,?,?,?)", (d["sys"], d["dia"], d["hr"], d["device_id"], t))
     conn.commit()
     
-    cur.execute("SELECT user_id FROM devices WHERE device_id=?", (d["device_id"],))
-    row = cur.fetchone()
-    if row:
-        cur.execute("SELECT chat_id FROM users WHERE id=?", (row[0],))
-        user = cur.fetchone()
-        if user:
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                          json={"chat_id": user[0], "text": f"Dữ liệu mới: SYS:{d['sys']} DIA:{d['dia']} HR:{d['hr']}"})
+    # Gửi tin nhắn cho chủ sở hữu thiết bị
+    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                  json={"chat_id": d["device_id"], "text": f"Dữ liệu mới: SYS:{d['sys']} DIA:{d['dia']} HR:{d['hr']}"})
     return "OK"
 
 @app.route("/api/users")
@@ -88,13 +70,7 @@ def get_users():
 @app.route("/api/data", methods=["GET"])
 @token_required
 def get_monitor_data():
-    query = """
-    SELECT data.sys, data.dia, data.hr, devices.user_id, data.time 
-    FROM data 
-    JOIN devices ON data.device_id = devices.device_id
-    ORDER BY data.time ASC
-    """
-    cur.execute(query)
+    cur.execute("SELECT sys, dia, hr, device_id, time FROM data ORDER BY time ASC")
     return jsonify(cur.fetchall())
 
 @app.route("/telegram", methods=["POST"])
@@ -103,23 +79,19 @@ def telegram():
     if "message" in data:
         msg = data["message"]
         chat_id = str(msg["chat"]["id"])
-        text = msg.get("text", "")
         name = msg["from"].get("first_name", "User")
-        
-        cur.execute("SELECT id FROM users WHERE chat_id=?", (chat_id,))
-        user = cur.fetchone()
-        
-        if not user:
-            uid = int(time.time())
-            cur.execute("INSERT INTO users VALUES(?,?,?)", (uid, name, chat_id))
-            conn.commit()
-        else:
-            uid = user[0]
+        text = msg.get("text", "")
+
+        if text == "/start":
+            # Tự động lấy chat_id làm ID User và ID Thiết bị
+            cur.execute("SELECT id FROM users WHERE chat_id=?", (chat_id,))
+            if not cur.fetchone():
+                cur.execute("INSERT INTO users VALUES(?,?,?)", (chat_id, name, chat_id))
+                cur.execute("INSERT INTO devices VALUES(?,?)", (chat_id, chat_id))
+                conn.commit()
             
-        if text.startswith("ESP"):
-            cur.execute("INSERT INTO devices VALUES(?,?)", (text, uid))
-            conn.commit()
-            
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                          json={"chat_id": chat_id, "text": f"Chào {name}! Thiết bị của bạn đã được tự động kết nối. ID của bạn là: {chat_id}. Hãy nhập ID này vào code ESP32 của bạn."})
     return "OK"
 
 if __name__ == "__main__":
