@@ -19,30 +19,40 @@ cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id
 cur.execute("CREATE TABLE IF NOT EXISTS admins(username TEXT, password TEXT)")
 conn.commit()
 
-cur.execute("SELECT * FROM admins")
-if not cur.fetchone():
-    cur.execute("INSERT INTO admins VALUES('admin','123456')")
-    conn.commit()
+# --- FORCE UPDATE ADMIN PASSWORD ---
+# Dòng này đảm bảo dù database cũ có gì, mật khẩu sẽ luôn là 123456 khi bạn restart server
+cur.execute("DELETE FROM admins WHERE username='admin'")
+cur.execute("INSERT INTO admins VALUES('admin','123456')")
+conn.commit()
 
 def token_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         token = request.headers.get("Authorization")
         if not token: return jsonify({"error": "No token"}), 403
-        try: jwt.decode(token, SECRET, algorithms=["HS256"])
-        except: return jsonify({"error": "Invalid token"}), 403
+        try: 
+            jwt.decode(token, SECRET, algorithms=["HS256"])
+        except: 
+            return jsonify({"error": "Invalid token"}), 403
         return f(*args, **kwargs)
     return decorated
 
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.json
-    cur.execute("SELECT * FROM admins WHERE username=? AND password=?",
-                (data.get("username"), data.get("password")))
+    u = data.get("username")
+    p = data.get("password")
+    
+    cur.execute("SELECT * FROM admins WHERE username=? AND password=?", (u, p))
     if cur.fetchone():
-        token = jwt.encode({"time": time.time()}, SECRET, algorithm="HS256")
-        return jsonify({"token": token})
-    return "FAIL", 401
+        # Xử lý Token để tương thích mọi phiên bản thư viện
+        encoded_jwt = jwt.encode({"time": time.time()}, SECRET, algorithm="HS256")
+        if isinstance(encoded_jwt, bytes):
+            encoded_jwt = encoded_jwt.decode('utf-8')
+            
+        return jsonify({"token": encoded_jwt})
+    
+    return jsonify({"error": "Wrong username or password"}), 401
 
 @app.route("/api/update_name", methods=["POST"])
 @token_required
@@ -59,7 +69,6 @@ def receive_data():
     cur.execute("INSERT INTO data VALUES(?,?,?,?,?)", (d["sys"], d["dia"], d["hr"], d["device_id"], t))
     conn.commit()
     
-    # Logic gửi Telegram đơn giản
     cur.execute("SELECT user_id FROM devices WHERE device_id=?", (d["device_id"],))
     row = cur.fetchone()
     if row:
@@ -92,17 +101,25 @@ def get_monitor_data():
 def telegram():
     data = request.json
     if "message" in data:
-        msg = data["message"]; chat_id = str(msg["chat"]["id"])
-        text = msg.get("text", ""); name = msg["from"].get("first_name", "User")
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        text = msg.get("text", "")
+        name = msg["from"].get("first_name", "User")
+        
         cur.execute("SELECT id FROM users WHERE chat_id=?", (chat_id,))
         user = cur.fetchone()
-        uid = user[0] if user else int(time.time())
+        
         if not user:
+            uid = int(time.time())
             cur.execute("INSERT INTO users VALUES(?,?,?)", (uid, name, chat_id))
             conn.commit()
+        else:
+            uid = user[0]
+            
         if text.startswith("ESP"):
             cur.execute("INSERT INTO devices VALUES(?,?)", (text, uid))
             conn.commit()
+            
     return "OK"
 
 if __name__ == "__main__":
