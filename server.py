@@ -9,15 +9,20 @@ SECRET = "123456"
 BOT_TOKEN = "8553903282:AAEjaRU2bFoT04fWAFrUF2cUOeSXmXP4How"
 
 def get_db():
-    return sqlite3.connect("db.sqlite", check_same_thread=False)
+    return sqlite3.connect("medical.sqlite", check_same_thread=False)
 
 conn = get_db()
 cur = conn.cursor()
-cur.execute("CREATE TABLE IF NOT EXISTS users(id TEXT, name TEXT, chat_id TEXT)")
-cur.execute("CREATE TABLE IF NOT EXISTS devices(device_id TEXT, user_id TEXT)")
-cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id TEXT, time TEXT)")
+# Bảng User: Lưu thông tin người dùng
+cur.execute("CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY, name TEXT, chat_id TEXT)")
+# Bảng Data: Lưu dữ liệu đo, kèm user_id để biết là của ai
+cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id TEXT, user_id TEXT, time TEXT)")
+# Bảng Active Sessions: Ghi nhớ máy MAY_XX hiện đang phục vụ ai
+cur.execute("CREATE TABLE IF NOT EXISTS sessions(device_id TEXT PRIMARY KEY, user_id TEXT)")
+# Bảng Admin
 cur.execute("CREATE TABLE IF NOT EXISTS admins(username TEXT, password TEXT)")
-# Đảm bảo mật khẩu luôn đúng
+
+# Khởi tạo Admin mặc định
 cur.execute("DELETE FROM admins WHERE username='admin'")
 cur.execute("INSERT INTO admins VALUES('admin','123456')")
 conn.commit()
@@ -49,16 +54,46 @@ def update_name():
     conn.commit()
     return "OK"
 
+@app.route("/telegram", methods=["POST"])
+def telegram():
+    data = request.json
+    if "message" in data:
+        msg = data["message"]
+        chat_id = str(msg["chat"]["id"])
+        name = msg["from"].get("first_name", "Người dùng")
+        text = msg.get("text", "").strip()
+
+        # Đăng ký user nếu chưa có
+        cur.execute("SELECT id FROM users WHERE id=?", (chat_id,))
+        if not cur.fetchone():
+            cur.execute("INSERT INTO users VALUES(?,?,?)", (chat_id, name, chat_id))
+            conn.commit()
+
+        # Nhận phiên đo (VD: MAY_01)
+        if text.startswith("MAY_"):
+            cur.execute("INSERT OR REPLACE INTO sessions VALUES(?,?)", (text, chat_id))
+            conn.commit()
+            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                          json={"chat_id": chat_id, "text": f"✅ Đã kết nối! Máy {text} giờ là của bạn. Hãy đo ngay, kết quả sẽ lưu vào lịch sử của bạn."})
+    return "OK"
+
 @app.route("/api/data", methods=["POST"])
 def receive_data():
     d = request.json
     t = time.strftime("%Y-%m-%d %H:%M:%S")
-    cur.execute("INSERT INTO data VALUES(?,?,?,?,?)", (d["sys"], d["dia"], d["hr"], d["device_id"], t))
+    
+    # Kiểm tra xem máy này đang phục vụ ai
+    cur.execute("SELECT user_id FROM sessions WHERE device_id=?", (d["device_id"],))
+    row = cur.fetchone()
+    user_id = row[0] if row else "Unknown"
+
+    # Lưu dữ liệu vào Database kèm ID người đo
+    cur.execute("INSERT INTO data VALUES(?,?,?,?,?,?)", (d["sys"], d["dia"], d["hr"], d["device_id"], user_id, t))
     conn.commit()
     
-    # Gửi tin nhắn cho chủ sở hữu thiết bị
-    requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                  json={"chat_id": d["device_id"], "text": f"Dữ liệu mới: SYS:{d['sys']} DIA:{d['dia']} HR:{d['hr']}"})
+    if user_id != "Unknown":
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+                      json={"chat_id": user_id, "text": f"🩺 Kết quả của bạn:\nSYS: {d['sys']} | DIA: {d['dia']} | HR: {d['hr']}"})
     return "OK"
 
 @app.route("/api/users")
@@ -67,32 +102,12 @@ def get_users():
     cur.execute("SELECT id, name FROM users")
     return jsonify(cur.fetchall())
 
-@app.route("/api/data", methods=["GET"])
+@app.route("/api/history")
 @token_required
-def get_monitor_data():
-    cur.execute("SELECT sys, dia, hr, device_id, time FROM data ORDER BY time ASC")
+def get_history():
+    user_id = request.args.get("user_id")
+    cur.execute("SELECT sys, dia, hr, time, device_id FROM data WHERE user_id=? ORDER BY time DESC", (user_id,))
     return jsonify(cur.fetchall())
-
-@app.route("/telegram", methods=["POST"])
-def telegram():
-    data = request.json
-    if "message" in data:
-        msg = data["message"]
-        chat_id = str(msg["chat"]["id"])
-        name = msg["from"].get("first_name", "User")
-        text = msg.get("text", "")
-
-        if text == "/start":
-            # Tự động lấy chat_id làm ID User và ID Thiết bị
-            cur.execute("SELECT id FROM users WHERE chat_id=?", (chat_id,))
-            if not cur.fetchone():
-                cur.execute("INSERT INTO users VALUES(?,?,?)", (chat_id, name, chat_id))
-                cur.execute("INSERT INTO devices VALUES(?,?)", (chat_id, chat_id))
-                conn.commit()
-            
-            requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                          json={"chat_id": chat_id, "text": f"Chào {name}! Thiết bị của bạn đã được tự động kết nối. ID của bạn là: {chat_id}. Hãy nhập ID này vào code ESP32 của bạn."})
-    return "OK"
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
