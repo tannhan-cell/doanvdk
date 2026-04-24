@@ -1,100 +1,115 @@
 from flask import Flask, request, jsonify
-import json
-import time
-import requests
+import sqlite3, time, requests
 
-# 1. Sửa lỗi khởi tạo Flask (phải là __name__)
-app = Flask(__name__)
+app = Flask(**name**)
+
 BOT_TOKEN = "8553903282:AAEjaRU2bFoT04fWAFrUF2cUOeSXmXP4How"
 
-# ===== LOAD DB =====
-try:
-    with open("db.json", "r") as f:
-        db = json.load(f)
-except:
-    db = {"users": [], "data": []}
+# ===== DB INIT =====
 
-# ===== SAVE =====
-def save():
-    with open("db.json", "w", encoding="utf-8") as f:
-        json.dump(db, f, indent=2, ensure_ascii=False)
+conn = sqlite3.connect("db.sqlite", check_same_thread=False)
+cur = conn.cursor()
 
-# ===== AI ANALYZE =====
+cur.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER, name TEXT, chat_id TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS devices(device_id TEXT, user_id INTEGER)")
+cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id TEXT, time TEXT)")
+conn.commit()
+
+# ===== AI =====
+
 def analyze(sys):
-    if sys >= 180:
-        return "🚨 NGUY HIỂM (Huyết áp cao độ 3)"
-    elif sys >= 140:
-        return "⚠️ CAO (Huyết áp cao độ 1-2)"
-    elif sys >= 120:
-        return "📊 TIỀN CAO HUYẾT ÁP"
-    else:
-        return "✅ BÌNH THƯỜNG"
+if sys >= 180: return "🚨 NGUY HIỂM"
+if sys >= 140: return "⚠️ CAO"
+if sys >= 120: return "📊 TIỀN CAO"
+return "✅ BÌNH THƯỜNG"
 
-# ===== ESP32 ENDPOINT =====
+# ===== ESP32 =====
+
 @app.route("/api/data", methods=["POST"])
 def receive_data():
-    d = request.json
-    if not d:
-        return "No data", 400
-    
-    d["time"] = time.strftime("%d/%m/%Y %H:%M:%S")
-    db["data"].append(d)
-    save()
+d = request.json
+t = time.strftime("%Y-%m-%d %H:%M:%S")
 
-    # Tìm user dựa trên user_id gửi từ ESP32
-    user = next((u for u in db["users"] if u["id"] == d.get("user_id")), None)
+```
+cur.execute("INSERT INTO data VALUES(?,?,?,?,?)",
+    (d["sys"], d["dia"], d["hr"], d["device_id"], t))
+conn.commit()
+
+cur.execute("SELECT user_id FROM devices WHERE device_id=?", (d["device_id"],))
+row = cur.fetchone()
+
+if row:
+    user_id = row[0]
+    cur.execute("SELECT chat_id FROM users WHERE id=?", (user_id,))
+    user = cur.fetchone()
 
     if user:
-        status_msg = analyze(d["sys"])
-        # Gửi thông báo về Telegram
-        telegram_url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
-        payload = {
-            "chat_id": user["chat_id"],
-            "text": f"{status_msg}\n───\nSYS: {d['sys']} mmHg\nDIA: {d['dia']} mmHg\nHR: {d['hr']} bpm"
-        }
-        try:
-            requests.post(telegram_url, json=payload)
-        except Exception as e:
-            print(f"Lỗi gửi Telegram: {e}")
+        msg = analyze(d["sys"])
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={
+                "chat_id": user[0],
+                "text": f"{msg}\nDevice:{d['device_id']}\nSYS:{d['sys']}\nDIA:{d['dia']}\nHR:{d['hr']}"
+            }
+        )
 
-    return "OK"
+return "OK"
+```
 
-# ===== TELEGRAM WEBHOOK =====
+# ===== TELEGRAM =====
+
 @app.route("/telegram", methods=["POST"])
 def telegram():
-    data = request.json
-    if "message" in data:
-        msg = data["message"]
-        text = msg.get("text")
-        chat_id = msg["chat"]["id"]
-        first_name = msg["from"].get("first_name", "User")
+data = request.json
 
-        if text == "/start":
-            # Kiểm tra nếu user chưa tồn tại thì thêm mới
-            if not any(u["chat_id"] == chat_id for u in db["users"]):
-                new_id = int(time.time())
-                db["users"].append({
-                    "id": new_id,
-                    "name": first_name,
-                    "chat_id": chat_id
-                })
-                save()
-                
-                welcome_text = f"Chào {first_name}! ID của bạn là: {new_id}\nHãy nhập ID này vào thiết bị ESP32 của bạn."
-                requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage", 
-                              json={"chat_id": chat_id, "text": welcome_text})
-    return "OK"
+```
+if "message" in data:
+    msg = data["message"]
+    chat_id = str(msg["chat"]["id"])
+    name = msg["from"]["first_name"]
+    text = msg.get("text","")
 
-# ===== API GET DATA =====
-@app.route("/api/users", methods=["GET"])
-def get_users():
-    return jsonify(db["users"])
+    cur.execute("SELECT * FROM users WHERE chat_id=?", (chat_id,))
+    user = cur.fetchone()
 
-@app.route("/api/data", methods=["GET"])
-def get_all_data():
-    return jsonify(db["data"])
+    if not user:
+        uid = int(time.time())
+        cur.execute("INSERT INTO users VALUES(?,?,?)", (uid, name, chat_id))
+        conn.commit()
+    else:
+        uid = user[0]
+
+    if text == "/start":
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id":chat_id,"text":"Nhập ID thiết bị (VD: ESP001)"})
+
+    elif text.startswith("ESP"):
+        cur.execute("INSERT INTO devices VALUES(?,?)", (text, uid))
+        conn.commit()
+
+        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id":chat_id,"text":"Đã liên kết!"})
+
+return "OK"
+```
+
+# ===== API =====
+
+@app.route("/api/users")
+def users():
+cur.execute("SELECT * FROM users")
+return jsonify(cur.fetchall())
+
+@app.route("/api/data")
+def data():
+cur.execute("SELECT * FROM data")
+return jsonify(cur.fetchall())
+
+@app.route("/api/devices")
+def devices():
+cur.execute("SELECT * FROM devices")
+return jsonify(cur.fetchall())
 
 # ===== RUN =====
-if __name__ == "__main__":
-    # Chạy ở port 3000
-    app.run(host="0.0.0.0", port=3000)
+
+app.run(host="0.0.0.0", port=3000)
