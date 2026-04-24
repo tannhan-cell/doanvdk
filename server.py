@@ -19,7 +19,6 @@ cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id
 cur.execute("CREATE TABLE IF NOT EXISTS sessions(device_id TEXT PRIMARY KEY, user_id TEXT)")
 cur.execute("CREATE TABLE IF NOT EXISTS admins(username TEXT, password TEXT)")
 
-# Đảm bảo có tài khoản admin
 cur.execute("DELETE FROM admins WHERE username='admin'")
 cur.execute("INSERT INTO admins VALUES('admin','123456')")
 conn.commit()
@@ -74,18 +73,26 @@ def get_history():
 @app.route("/api/data", methods=["POST"])
 def receive_data():
     d = request.json
-    # FIX GIỜ VIỆT NAM: Lấy giờ UTC + 7 tiếng
     now_vn = datetime.utcnow() + timedelta(hours=7)
     t = now_vn.strftime("%Y-%m-%d %H:%M:%S")
     
+    # KIỂM TRA MÁY ĐÃ CÓ CHỦ CHƯA
     cur.execute("SELECT user_id FROM sessions WHERE device_id=?", (d["device_id"],))
     row = cur.fetchone()
-    user_id = row[0] if row else "Unknown"
+    
+    if row:
+        user_id = row[0]
+    else:
+        # NẾU CHƯA CÓ CHỦ: Tự tạo bệnh nhân tạm để Web hiện lên
+        user_id = "TEMP_" + d["device_id"]
+        cur.execute("INSERT OR IGNORE INTO users VALUES(?, ?, ?)", (user_id, "Máy mới: " + d["device_id"], "0"))
+        conn.commit()
 
     cur.execute("INSERT INTO data VALUES(?,?,?,?,?,?)", (d["sys"], d["dia"], d["hr"], d["device_id"], user_id, t))
     conn.commit()
     
-    if user_id != "Unknown":
+    # Gửi Telegram nếu máy đã gán cho một Chat ID thật
+    if not user_id.startswith("TEMP_"):
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                       json={"chat_id": user_id, "text": f"🩺 Kết quả mới ({t}):\nSYS: {d['sys']} | DIA: {d['dia']} | HR: {d['hr']}"})
     return "OK"
