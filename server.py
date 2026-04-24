@@ -94,5 +94,23 @@ def telegram():
                           json={"chat_id": chat_id, "text": f"✅ Đã nhận máy {text}."})
     return "OK"
 
+@app.route("/api/update_name", methods=["POST"])
+@token_required
+def update_name():
+    try:
+        d = request.json
+        user_id = d.get("id")
+        new_name = d.get("new_name")
+        
+        if not user_id or not new_name:
+            return jsonify({"error": "Thiếu dữ liệu"}), 400
+            
+        cur.execute("UPDATE users SET name=? WHERE id=?", (new_name, user_id))
+        conn.commit()
+        return "OK"
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+        
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
