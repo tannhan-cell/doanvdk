@@ -1,11 +1,12 @@
 from flask import Flask, request, jsonify
-import sqlite3, time, requests
+import sqlite3, time, requests, jwt
+from functools import wraps
 
 app = Flask(**name**)
-
+SECRET = "SUPER_SECRET_KEY"
 BOT_TOKEN = "8553903282:AAEjaRU2bFoT04fWAFrUF2cUOeSXmXP4How"
 
-# ===== DB INIT =====
+# ===== DB =====
 
 conn = sqlite3.connect("db.sqlite", check_same_thread=False)
 cur = conn.cursor()
@@ -13,15 +14,55 @@ cur = conn.cursor()
 cur.execute("CREATE TABLE IF NOT EXISTS users(id INTEGER, name TEXT, chat_id TEXT)")
 cur.execute("CREATE TABLE IF NOT EXISTS devices(device_id TEXT, user_id INTEGER)")
 cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id TEXT, time TEXT)")
+cur.execute("CREATE TABLE IF NOT EXISTS admins(username TEXT, password TEXT)")
 conn.commit()
+
+# tạo admin mặc định
+
+cur.execute("SELECT * FROM admins")
+if not cur.fetchone():
+cur.execute("INSERT INTO admins VALUES('admin','123456')")
+conn.commit()
+
+# ===== AUTH =====
+
+def token_required(f):
+@wraps(f)
+def decorated(*args, **kwargs):
+token = request.headers.get("Authorization")
+if not token:
+return "No token", 403
+try:
+jwt.decode(token, SECRET, algorithms=["HS256"])
+except:
+return "Invalid token", 403
+return f(*args, **kwargs)
+return decorated
+
+@app.route("/api/login", methods=["POST"])
+def login():
+data = request.json
+cur.execute("SELECT * FROM admins WHERE username=? AND password=?",
+(data["username"], data["password"]))
+if cur.fetchone():
+token = jwt.encode({"time":time.time()}, SECRET, algorithm="HS256")
+return jsonify({"token":token})
+return "FAIL",401
 
 # ===== AI =====
 
-def analyze(sys):
-if sys >= 180: return "🚨 NGUY HIỂM"
-if sys >= 140: return "⚠️ CAO"
-if sys >= 120: return "📊 TIỀN CAO"
-return "✅ BÌNH THƯỜNG"
+def analyze(sys, history):
+avg = sum(history)/len(history) if history else sys
+
+```
+if sys >= 180 or avg > 160:
+    return "🚨 Nguy hiểm cao"
+if sys >= 140:
+    return "⚠️ Cao huyết áp"
+if sys >= 120:
+    return "📊 Tiền cao huyết áp"
+return "✅ Bình thường"
+```
 
 # ===== ESP32 =====
 
@@ -35,21 +76,24 @@ cur.execute("INSERT INTO data VALUES(?,?,?,?,?)",
     (d["sys"], d["dia"], d["hr"], d["device_id"], t))
 conn.commit()
 
+# lấy history 5 mẫu gần nhất
+cur.execute("SELECT sys FROM data WHERE device_id=? ORDER BY time DESC LIMIT 5",(d["device_id"],))
+history = [x[0] for x in cur.fetchall()]
+
+msg = analyze(d["sys"], history)
+
 cur.execute("SELECT user_id FROM devices WHERE device_id=?", (d["device_id"],))
 row = cur.fetchone()
 
 if row:
-    user_id = row[0]
-    cur.execute("SELECT chat_id FROM users WHERE id=?", (user_id,))
+    cur.execute("SELECT chat_id FROM users WHERE id=?", (row[0],))
     user = cur.fetchone()
-
     if user:
-        msg = analyze(d["sys"])
         requests.post(
             f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
             json={
                 "chat_id": user[0],
-                "text": f"{msg}\nDevice:{d['device_id']}\nSYS:{d['sys']}\nDIA:{d['dia']}\nHR:{d['hr']}"
+                "text": f"{msg}\nSYS:{d['sys']} DIA:{d['dia']} HR:{d['hr']}"
             }
         )
 
@@ -74,21 +118,19 @@ if "message" in data:
 
     if not user:
         uid = int(time.time())
-        cur.execute("INSERT INTO users VALUES(?,?,?)", (uid, name, chat_id))
+        cur.execute("INSERT INTO users VALUES(?,?,?)",(uid,name,chat_id))
         conn.commit()
     else:
         uid = user[0]
 
     if text == "/start":
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id":chat_id,"text":"Nhập ID thiết bị (VD: ESP001)"})
-
+        requests.post(
+            f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
+            json={"chat_id":chat_id,"text":"Nhập ID thiết bị (ESP001)"}
+        )
     elif text.startswith("ESP"):
-        cur.execute("INSERT INTO devices VALUES(?,?)", (text, uid))
+        cur.execute("INSERT INTO devices VALUES(?,?)",(text,uid))
         conn.commit()
-
-        requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-            json={"chat_id":chat_id,"text":"Đã liên kết!"})
 
 return "OK"
 ```
@@ -96,20 +138,15 @@ return "OK"
 # ===== API =====
 
 @app.route("/api/users")
+@token_required
 def users():
 cur.execute("SELECT * FROM users")
 return jsonify(cur.fetchall())
 
 @app.route("/api/data")
+@token_required
 def data():
 cur.execute("SELECT * FROM data")
 return jsonify(cur.fetchall())
-
-@app.route("/api/devices")
-def devices():
-cur.execute("SELECT * FROM devices")
-return jsonify(cur.fetchall())
-
-# ===== RUN =====
 
 app.run(host="0.0.0.0", port=3000)
