@@ -2,7 +2,6 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 import sqlite3, time, requests, jwt
 from functools import wraps
-from datetime import datetime, timedelta
 
 app = Flask(__name__)
 CORS(app)
@@ -61,11 +60,7 @@ def get_history():
 @app.route("/api/data", methods=["POST"])
 def receive_data():
     d = request.json
-    # --- ĐOẠN SỬA ĐỂ ĐÚNG GIỜ VIỆT NAM ---
-    # Lấy giờ UTC hiện tại của server rồi cộng thêm 7 tiếng
-    now = datetime.utcnow() + timedelta(hours=7)
-    t = now.strftime("%Y-%m-%d %H:%M:%S")
-   
+    t = time.strftime("%Y-%m-%d %H:%M:%S")
     cur.execute("SELECT user_id FROM sessions WHERE device_id=?", (d["device_id"],))
     row = cur.fetchone()
     user_id = row[0] if row else "Unknown"
@@ -93,24 +88,6 @@ def telegram():
             requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
                           json={"chat_id": chat_id, "text": f"✅ Đã nhận máy {text}."})
     return "OK"
-
-@app.route("/api/update_name", methods=["POST"])
-@token_required
-def update_name():
-    try:
-        d = request.json
-        user_id = d.get("id")
-        new_name = d.get("new_name")
-        
-        if not user_id or not new_name:
-            return jsonify({"error": "Thiếu dữ liệu"}), 400
-            
-        cur.execute("UPDATE users SET name=? WHERE id=?", (new_name, user_id))
-        conn.commit()
-        return "OK"
-    except Exception as e:
-        return jsonify({"error": str(e)}), 500
-        
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=3000)
