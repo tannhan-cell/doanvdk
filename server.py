@@ -19,6 +19,7 @@ cur.execute("CREATE TABLE IF NOT EXISTS data(sys INT, dia INT, hr INT, device_id
 cur.execute("CREATE TABLE IF NOT EXISTS sessions(device_id TEXT PRIMARY KEY, user_id TEXT)")
 cur.execute("CREATE TABLE IF NOT EXISTS admins(username TEXT, password TEXT)")
 
+# Đảm bảo có tài khoản admin
 cur.execute("DELETE FROM admins WHERE username='admin'")
 cur.execute("INSERT INTO admins VALUES('admin','123456')")
 conn.commit()
@@ -34,6 +35,10 @@ def token_required(f):
             return jsonify({"error": "Invalid token"}), 403
         return f(*args, **kwargs)
     return decorated
+
+@app.route("/")
+def home():
+    return "Server ICU doanvdk is Online!"
 
 @app.route("/api/login", methods=["POST"])
 def login():
@@ -69,7 +74,7 @@ def get_history():
 @app.route("/api/data", methods=["POST"])
 def receive_data():
     d = request.json
-    # Ép giờ về Việt Nam (UTC+7)
+    # FIX GIỜ VIỆT NAM: Lấy giờ UTC + 7 tiếng
     now_vn = datetime.utcnow() + timedelta(hours=7)
     t = now_vn.strftime("%Y-%m-%d %H:%M:%S")
     
@@ -104,4 +109,4 @@ def telegram():
     return "OK"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=3000)
+    app.run(host="0.0.0.0", port=10000)
