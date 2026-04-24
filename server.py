@@ -35,10 +35,6 @@ def token_required(f):
         return f(*args, **kwargs)
     return decorated
 
-@app.route("/")
-def home():
-    return "Server ICU doanvdk is Online!"
-
 @app.route("/api/login", methods=["POST"])
 def login():
     data = request.json
@@ -55,14 +51,6 @@ def get_users():
     cur.execute("SELECT id, name FROM users")
     return jsonify(cur.fetchall())
 
-@app.route("/api/update_name", methods=["POST"])
-@token_required
-def update_name():
-    d = request.json
-    cur.execute("UPDATE users SET name=? WHERE id=?", (d["new_name"], d["id"]))
-    conn.commit()
-    return "OK"
-
 @app.route("/api/history")
 @token_required
 def get_history():
@@ -73,28 +61,19 @@ def get_history():
 @app.route("/api/data", methods=["POST"])
 def receive_data():
     d = request.json
-    now_vn = datetime.utcnow() + timedelta(hours=7)
-    t = now_vn.strftime("%Y-%m-%d %H:%M:%S")
-    
-    # KIỂM TRA MÁY ĐÃ CÓ CHỦ CHƯA
+    # --- ĐOẠN SỬA ĐỂ ĐÚNG GIỜ VIỆT NAM ---
+    # Lấy giờ UTC hiện tại của server rồi cộng thêm 7 tiếng
+    now = datetime.utcnow() + timedelta(hours=7)
+    t = now.strftime("%Y-%m-%d %H:%M:%S")
+   
     cur.execute("SELECT user_id FROM sessions WHERE device_id=?", (d["device_id"],))
     row = cur.fetchone()
-    
-    if row:
-        user_id = row[0]
-    else:
-        # NẾU CHƯA CÓ CHỦ: Tự tạo bệnh nhân tạm để Web hiện lên
-        user_id = "TEMP_" + d["device_id"]
-        cur.execute("INSERT OR IGNORE INTO users VALUES(?, ?, ?)", (user_id, "Máy mới: " + d["device_id"], "0"))
-        conn.commit()
-
+    user_id = row[0] if row else "Unknown"
     cur.execute("INSERT INTO data VALUES(?,?,?,?,?,?)", (d["sys"], d["dia"], d["hr"], d["device_id"], user_id, t))
     conn.commit()
-    
-    # Gửi Telegram nếu máy đã gán cho một Chat ID thật
-    if not user_id.startswith("TEMP_"):
+    if user_id != "Unknown":
         requests.post(f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage",
-                      json={"chat_id": user_id, "text": f"🩺 Kết quả mới ({t}):\nSYS: {d['sys']} | DIA: {d['dia']} | HR: {d['hr']}"})
+                      json={"chat_id": user_id, "text": f"🩺 Kết quả mới:\nSYS: {d['sys']} | DIA: {d['dia']} | HR: {d['hr']}"})
     return "OK"
 
 @app.route("/telegram", methods=["POST"])
@@ -116,4 +95,4 @@ def telegram():
     return "OK"
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=10000)
+    app.run(host="0.0.0.0", port=3000)
