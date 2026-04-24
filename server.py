@@ -3,7 +3,7 @@ import sqlite3, time, requests, jwt
 from functools import wraps
 
 app = Flask(**name**)
-SECRET = "SUPER_SECRET_KEY"
+SECRET = "123456"
 BOT_TOKEN = "8553903282:AAEjaRU2bFoT04fWAFrUF2cUOeSXmXP4How"
 
 # ===== DB =====
