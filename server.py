@@ -99,6 +99,7 @@ class Colors:
     UNDERLINE = '\033[4m'
     BLINK = '\033[5m'
     REVERSE = '\033[7m'
+    OKYELLOW = '\033[93m'
 
 # ===================== DATA CLASSES =====================
 
