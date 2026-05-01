@@ -42,12 +42,12 @@ from dataclasses import dataclass, field, asdict
 # ===================== SUPER VIP CONFIG =====================
 API_CONFIG = {
     'shodan': {
-        'api_key': 'YOUR_SHODAN_API_KEY',  # ← Thay API key của bạn
+        'api_key': 'rQ8qqbAnS6myepRRmWCWJuCUlBxB1NCN',  # ← Thay API key của bạn
         'enabled': True,
     },
     'censys': {
-        'api_id': 'YOUR_CENSYS_API_ID',
-        'api_secret': 'YOUR_CENSYS_API_SECRET',
+        'api_id': '4cCPxjX7',
+        'api_secret': 'censys_4cCPxjX7_DraQW7rntcL9PP5GSLtPuUka',
         'enabled': False,
     },
     'fofa': {
@@ -59,11 +59,15 @@ API_CONFIG = {
 
 # GPS Home Coordinates - Thay bằng tọa độ chính xác của bạn
 HOME_COORDS = {
-    'lat': 10.884861,   # Tương ứng với 10°53'05.5"N
-    'lng': 106.812028,  # Tương ứng với 106°48'43.3"E
+
+    'lat': 10.884861,
+
+    'lng': 106.812028,
+
 }
+
 SCAN_CONFIG = {
-    'radius_km': 100,              # Bán kính quét (km) - có thể tăng lên 100+
+    'radius_km': 50,              # Bán kính quét (km) - có thể tăng lên 100+
     'max_threads': 500,
     'timeout': 3,
     'ports': [554, 80, 8080, 443, 8554, 1935, 37777, 34567, 
@@ -184,7 +188,7 @@ class ShodanScanner:
     """Shodan.io API scanner - search cameras by geolocation"""
     
     def __init__(self, api_key: str):
-        self.api = shodan.Shodan(api_key) if api_key != 'rQ8qqbAnS6myepRRmWCWJuCUlBxB1NCN' else None
+        self.api = shodan.Shodan(api_key) if api_key != 'YOUR_SHODAN_API_KEY' else None
         self.results = []
     
     def search_by_geo(self, lat: float, lng: float, radius_km: float) -> List[CameraDevice]:
